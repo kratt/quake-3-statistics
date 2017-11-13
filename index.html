@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" media="screen" href="css/style.css" />
+
+    <meta charset="UTF-8">
+    <title></title>
+    <script type="text/javascript" src="scripts/QuakeStats.js"></script>
+    <script type="text/javascript" src="scripts/plotly-latest.min.js"></script>
+
+    <script type="text/javascript">
+
+        /**
+         * Quake 3 statistics
+         *
+         * 13.11.2017
+         * Julian Kratt
+         * Julian.Kratt@googlemail.com
+         */
+
+        // stores all relevant data of quake games
+        var qs = null;
+       game_has_player = function(game, player){
+
+           for(var id in game.players)
+           {
+                if(game.players[id].name == player)
+                    return true;
+           }
+
+           return false;
+       }
+
+       get_player = function(game, player)
+       {
+           for(var id in game.players)
+           {
+               if(game.players[id].name == player)
+                   return game.players[id];
+           }
+
+           return null;
+       }
+
+       get_game_info = function(game)
+       {
+           var scores  = new Array();
+           for(var id in game.players){
+               scores[id] = {score : game.players[id].score, name : game.players[id].name};
+           }
+
+           // sort by score
+           scores.sort(function(a, b){return b.score- a.score});
+
+           var info = game.mapName + "<br>";
+           info += "--------------- <br>";
+           for(var id in scores) {
+               info += scores[id].score + " " +  scores[id].name + "<br>";
+           }
+
+           return info;
+       }
+
+        get_winner_name = function(game)
+        {
+            var scores  = new Array();
+            for(var id in game.players){
+                scores[id] = {score : game.players[id].score, name : game.players[id].name};
+            }
+
+            // sort by score
+            scores.sort(function(a, b){return b.score- a.score});
+
+            return scores[0].name;
+        }
+
+
+        print_score = function(game)
+        {
+            console.log('\n ------------');
+            for(var idx in game.players)
+            {
+                console.log(game.players[idx].score + ' ' + game.players[idx].name);
+            }
+        }
+
+       update_chart = function()
+       {
+           var games = qs.games;
+           var plotData = new Array();
+
+           var players  = get_player_names_from_selection();
+           var plotAttr = get_plot_attribute_from_selection();
+
+
+           var useLines = document.getElementById("CheckBoxLines").checked;
+
+
+           // create for each player one plot
+           for(var i=0; i<players.length; ++i)
+           {
+               var playerName = players[i];
+
+               var x_values  = new Array();
+               var y_values  = new Array();
+               var game_info = new Array();
+
+               // go through all games and collect data
+               for (var j = 0; j < games.length; ++j)
+               {
+                   var game = games[j];
+                   if (!game_has_player(game, playerName))
+                       continue;
+
+                   var player = get_player(game, playerName);
+
+                   if(player == null)
+                       continue;
+
+                   // if we had a rage quite, skip
+                   if(player.rageQuit)
+                     continue;
+
+
+                   // according to plot attribute set scale of y-axis
+                   var y_min = 0.0;
+                   var y_max = 0.6;
+
+                   var y = 0.0;
+                   if(plotAttr == 'Dmg Given / Dmg Received'){
+                       if(player.dmgRecvd != 0)
+                           y = player.dmgGiven / player.dmgRecvd;
+                       else
+                           y = 0;
+
+                       y_min = 0.0;
+                       y_max = 3.0;
+                   }
+                   else if(plotAttr == 'Accuracy MachineGun')
+                        y =  player.accMgun;
+                   else if(plotAttr == 'Accuracy Railgun')
+                       y =  player.accRgun;
+                   else if(plotAttr == 'Accuracy Rocket Launcher')
+                       y =  player.accRock;
+                   else if(plotAttr == 'Accuracy Grenade Launcher')
+                       y =  player.accGlau;
+                   else if(plotAttr == 'Accuracy Shotgun')
+                       y =  player.accShot;
+                   else if(plotAttr == 'Accuracy Plasmagun')
+                       y =  player.accPlas;
+                   else if(plotAttr == '1st Place')
+                   {
+                       // if player was not first in this game, skip it
+                       var winner = get_winner_name(game);
+                       if( winner != playerName)
+                             continue;
+
+                       if(player.dmgRecvd != 0)
+                         y = player.dmgGiven / player.dmgRecvd;
+                       else
+                         y = 0;
+
+                       y_min = 0.0;
+                       y_max = 3.0;
+                   }
+
+                   // accuracies are intialized with -1, only if acc is available (<=0) take it
+                   if(y <= 0)
+                        continue;
+
+
+                   var time = game.time;
+                   var info = get_game_info(game);
+
+                   x_values.push(time);
+                   y_values.push(y);
+                   game_info.push(info);
+               }
+
+               // smooth x values using a sliding window
+               // size of sliding window defined in days
+               var windowSize = document.getElementById("SlidingWindowSlider").value;
+               var halfWindow = Math.floor(windowSize / 2);
+
+               var y_values_smoothed = new Array();
+               for(var j=0; j<y_values.length; ++j)
+               {
+                   var sum = y_values[j];
+                   var count = 1.0;
+
+                   for(var k=1; k <= halfWindow; ++k)
+                   {
+                       // ffw
+                       if(j+k < y_values.length){
+                           sum += y_values[j+k];
+                           ++count;
+                       }
+
+                       // bwd
+                       if(j-k >= 0)
+                       {
+                           sum += y_values[j-k];
+                           ++count;
+                       }
+                   }
+
+                   y_values_smoothed[j] = sum / count;
+               }
+
+               y_values = y_values_smoothed;
+
+               var trace = {
+                   x: x_values,
+                   y: y_values,
+                   mode: useLines ? 'lines' : 'markers',
+                   name: playerName,
+                   text: game_info,
+                   line: {
+                       //color: 'rgb(55, 128, 191)',
+                       width: 1
+                   },
+                   marker: {
+                       //color: 'rgb(55, 128, 191)',
+                       size: 5,
+                       line: {
+                           color: 'white',
+                           width: 0.5
+                       }
+                   },
+                   type: 'scatter'
+               };
+
+               plotData.push(trace);
+           }
+
+           var layout = {
+               title: plotAttr,
+               xaxis: {
+                   title: 'Date',
+                   showgrid: false,
+                   zeroline: false,
+                   autorange : true
+               },
+               yaxis: {
+                   title: plotAttr,
+                   showline: false,
+                   autorange : false,
+                   range : [y_min, y_max]
+               },
+               legend: {
+                   y: 0.5,
+                   //traceorder: 'reversed',
+                   font: {size: 16},
+                   yref: 'paper'
+               }
+           };
+
+           Plotly.newPlot('ScatterPlot', plotData, layout);
+       }
+
+        get_player_names_from_selection = function()
+        {
+            // collect all players from drop down selections
+            var players = new Array();
+            var table = document.getElementById("PlayerTable");
+            for (var i = 0, row; row = table.rows[i]; i++)
+            {
+                var e = document.getElementById("PlayerList"+i);
+                var playerName = e.options[e.selectedIndex].value;
+                players.push(playerName);
+            }
+
+            return players;
+        }
+
+        get_plot_attribute_from_selection = function()
+        {
+            var sel = document.getElementById("PlotAttribute");
+            return sel.options[sel.selectedIndex].value;
+        }
+
+        get_game_from_selection = function()
+        {
+            var sel = document.getElementById("GameListSelect");
+            return qs.games[sel.selectedIndex];
+        }
+
+        onclick_add_player = function()
+        {
+            var table = document.getElementById("PlayerTable");
+            var curSize = table.rows.length;
+            var row = table.insertRow();
+            var cell = row.insertCell();
+
+            var select = document.createElement("select");
+            select.setAttribute("id", "PlayerList"+curSize);
+            select.setAttribute("onchange", "update_chart()");
+
+            var players = qs.players;
+            for(var i=0; i<players.length; ++i)
+            {
+                var option = document.createElement('option');
+                option.setAttribute("value",players[i].name);
+                option.appendChild(document.createTextNode(players[i].name));
+                select.appendChild(option);
+            }
+
+            select.selectedIndex = table.rows.length-1;
+            cell.appendChild(select);
+
+            //update chart
+            update_chart();
+
+            // disable button if we only have one player
+            var rb = document.getElementById("RemoveBtn");
+
+            if(table.rows.length == 1) {
+                rb.disabled = true;
+            }
+            else{
+                rb.disabled = false;
+            }
+        }
+
+        onclick_remove_player = function()
+        {
+            var table = document.getElementById("PlayerTable");
+            if(table.rows.length == 1)
+                return;
+
+            table.deleteRow(table.rows.length-1);
+            update_chart();
+
+            if(table.rows.length == 1)
+            {
+                var rb = document.getElementById("RemoveBtn");
+                rb.disabled = true;
+            }
+        }
+
+        update_kill_heatmap = function(game)
+        {
+            var players = game.players;
+
+            var x_values = new Array();
+            var z_values = new Array();
+
+            for(var i=0; i<players.length; ++i)
+            {
+                x_values.push(players[i].name);
+
+                var killData = [];
+                for(var j=0; j<players[i].kills.length; ++j) {
+                    if (players[i].kills[j] == undefined)
+                        killData.push(0.0);
+                    else
+                        killData.push(players[i].kills[j]);
+                }
+
+                if(killData.length < players.length)
+                    killData.push(0.0);
+
+                z_values.push(killData);
+            }
+
+            var data = [
+                {
+                    x : x_values,
+                    y : x_values,
+                    z : z_values,
+                    type : 'heatmap',
+					colorscale: 'YIGnBu',
+					reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('KillHeatMap', data);
+        }
+
+        update_spawn_kill_heatmap = function(game)
+        {
+            var players = game.players;
+
+            var x_values = new Array();
+            var z_values = new Array();
+
+            for(var i=0; i<players.length; ++i)
+            {
+                x_values.push(players[i].name);
+
+                var killData = [];
+                for(var j=0; j<players.length; ++j) {
+
+                if (players[i].spawnKills[j] == undefined)
+                    killData.push(0.0);
+                else
+                    killData.push(players[i].spawnKills[j]);
+                }
+                z_values.push(killData);
+            }
+
+            var data = [
+                {
+                    x : x_values,
+                    y : x_values,
+                    z : z_values,
+                    type : 'heatmap',
+                    colorscale: 'YIGnBu',
+                    reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('SpawnKillHeatMap', data);
+        }
+
+        update_accuracy_heatmap = function(game)
+        {
+            var players = game.players;
+
+            // first we have to check which weapons were available (accuracy > 0)
+            var weapons = new Array();
+            for (var i = 0; i < players.length; ++i)
+            {
+                if(players[i].accMgun > 0.0 && weapons.indexOf('Mgun') == -1)
+                    weapons.push('Mgun');
+
+                if(players[i].accRgun > 0.0 && weapons.indexOf('Rgun') == -1)
+                    weapons.push('Rgun');
+
+                if(players[i].accRock > 0.0 && weapons.indexOf('Rock') == -1)
+                    weapons.push('Rock');
+
+                if(players[i].accShot > 0.0 && weapons.indexOf('Shot') == -1)
+                    weapons.push('Shot');
+
+                if(players[i].accPlas > 0.0 && weapons.indexOf('Plas') == -1)
+                    weapons.push('Plas');
+
+                if(players[i].accGlau > 0.0 && weapons.indexOf('Glau') == -1)
+                    weapons.push('Glau');
+            }
+
+
+            var x_values = new Array();
+            var y_values = new Array();
+            var z_values = new Array();
+
+            for(var i=0; i < weapons.length; ++i) {
+                x_values.push(weapons[i]);
+            }
+
+            for (var i = 0; i < players.length; ++i) {
+                y_values.push(players[i].name);
+            }
+
+
+            for (var i = 0; i < players.length; ++i) {
+
+                var accData = [];
+
+                for(var j=0; j<weapons.length; ++j)
+                {
+                    // it still could be the case that one player has acc of -1
+                    if(weapons[j] == 'Mgun') {
+                        if(players[i].accMgun > 0){
+                            accData.push(players[i].accMgun);
+                        }
+                        else{
+                            accData.push(0.0);
+                        }
+                    }
+                    else if(weapons[j] == 'Rgun') {
+                        if(players[i].accRgun > 0){
+                            accData.push(players[i].accRgun);
+                        }
+                        else{
+                            accData.push(0.0);
+                        }
+                    }
+                   else if(weapons[j] == 'Rock') {
+                        if(players[i].accRock > 0){
+                            accData.push(players[i].accRock);
+                        }
+                        else{
+                            accData.push(0.0);
+                        }
+                    }
+                    else if(weapons[j] == 'Shot') {
+                        if(players[i].accShot > 0){
+                            accData.push(players[i].accShot);
+                        }
+                        else{
+                            accData.push(0.0);
+                        }
+                    }
+                   else if(weapons[j] == 'Plas') {
+                        if(players[i].accPlas > 0){
+                            accData.push(players[i].accPlas);
+                        }
+                        else{
+                            accData.push(0.0);
+                        }
+                    }
+                   else if(weapons[j] == 'Glau') {
+                        if(players[i].accGlau > 0){
+                            accData.push(players[i].accGlau);
+                        }
+                        else{
+                            accData.push(0.0);
+                        }
+                    }
+                }
+
+                z_values.push(accData);
+            }
+
+            var data = [
+                {
+                    x: x_values,
+                    y: y_values,
+                    z: z_values,
+                    type: 'heatmap',
+					colorscale: 'YIGnBu',
+					reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('AccuracyHeatMap', data);
+        }
+
+        update_item_heatmap = function(game)
+        {
+            var players = game.players;
+
+            // first we have to check which items were available (num > 0)
+            var items = new Array();
+            for (var i = 0; i < players.length; ++i)
+            {
+                //console.log(players[i]);
+                if(players[i].numTeleporter > 0.0 && items.indexOf('Teleporter') == -1)
+                    items.push('Teleporter');
+
+                if(players[i].numArmorCombat > 0.0 && items.indexOf('ArmorCombat') == -1)
+                    items.push('ArmorCombat');
+
+                if(players[i].numArmorBody > 0.0 && items.indexOf('ArmorBody') == -1)
+                    items.push('ArmorBody');
+
+                if(players[i].numQuad > 0.0 && items.indexOf('QuadDmg') == -1)
+                    items.push('QuadDmg');
+            }
+
+           // console.log(items);
+
+            var x_values = new Array();
+            var y_values = new Array();
+            var z_values = new Array();
+
+            for(var i=0; i < items.length; ++i) {
+                x_values.push(items[i]);
+            }
+
+            for (var i = 0; i < players.length; ++i) {
+                y_values.push(players[i].name);
+            }
+
+
+            for (var i = 0; i < players.length; ++i) {
+
+                var itemData = [];
+
+                for(var j=0; j<items.length; ++j)
+                {
+                    // it still could be the case that one player has item num of -1
+                    if(items[j] == 'Teleporter') {
+                        if(players[i].numTeleporter > 0){
+                            itemData.push(players[i].numTeleporter);
+                        }
+                        else{
+                            itemData.push(0.0);
+                        }
+                    }
+                    else if(items[j] == 'ArmorCombat') {
+                        if(players[i].numArmorCombat > 0){
+                            itemData.push(players[i].numArmorCombat);
+                        }
+                        else{
+                            itemData.push(0.0);
+                        }
+                    }
+                    else if(items[j] == 'ArmorBody') {
+                        if(players[i].numArmorBody > 0){
+                            itemData.push(players[i].numArmorBody);
+                        }
+                        else{
+                            itemData.push(0.0);
+                        }
+                    }
+                    else if(items[j] == 'QuadDmg') {
+                        if(players[i].numQuad > 0){
+                            itemData.push(players[i].numQuad);
+                        }
+                        else{
+                            itemData.push(0.0);
+                        }
+                    }
+                }
+
+                z_values.push(itemData);
+            }
+
+            var data = [
+                {
+                    x: x_values,
+                    y: y_values,
+                    z: z_values,
+                    type: 'heatmap',
+                    colorscale: 'YIGnBu',
+                    reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('ItemHeatMap', data);
+        }
+
+        update_item_health_heatmap = function(game)
+        {
+            var players = game.players;
+
+            // first we have to check which items were available (num > 0)
+            var items = new Array();
+            for (var i = 0; i < players.length; ++i)
+            {
+                if(players[i].numHealthSmall > 0.0 && items.indexOf('Health (25)') == -1)
+                    items.push('Health (25)');
+
+                if(players[i].numHealthLarge > 0.0 && items.indexOf('Health (50)') == -1)
+                    items.push('Health (50)');
+            }
+
+            var x_values = new Array();
+            var y_values = new Array();
+            var z_values = new Array();
+
+            for(var i=0; i < items.length; ++i) {
+                x_values.push(items[i]);
+            }
+
+            for (var i = 0; i < players.length; ++i) {
+                y_values.push(players[i].name);
+            }
+
+
+            for (var i = 0; i < players.length; ++i) {
+
+                var itemData = [];
+
+                for(var j=0; j<items.length; ++j)
+                {
+                     if(items[j] == 'Health (25)') {
+                        if(players[i].numHealthSmall > 0){
+                            itemData.push(players[i].numHealthSmall);
+                        }
+                        else{
+                            itemData.push(0.0);
+                        }
+                    }
+                    else if(items[j] == 'Health (50)') {
+                        if(players[i].numHealthLarge > 0){
+                            itemData.push(players[i].numHealthLarge);
+                        }
+                        else{
+                            itemData.push(0.0);
+                        }
+                    }
+                }
+
+                z_values.push(itemData);
+            }
+
+            var data = [
+                {
+                    x: x_values,
+                    y: y_values,
+                    z: z_values,
+                    type: 'heatmap',
+                    colorscale: 'YIGnBu',
+                    reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('ItemHealthHeatMap', data);
+        }
+
+        update_suicides_heatmap = function(game)
+        {
+            var players = game.players;
+
+            var x_values = new Array();
+            var y_values = new Array();
+            var z_values = new Array();
+
+            x_values.push(' ');
+
+            for (var i = 0; i < players.length; ++i) {
+                y_values.push(players[i].name);
+            }
+
+            for (var i = 0; i < players.length; ++i) {
+                var numSuicides = [players[i].suicides];
+                z_values.push(numSuicides);
+            }
+
+
+            var data = [
+                {
+                    x: x_values,
+                    y: y_values,
+                    z: z_values,
+                    type: 'heatmap',
+					colorscale: 'YIGnBu',
+					reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('SuicidesHeatMap', data);
+        }
+
+        update_killing_streak_heatmap = function(game)
+        {
+            var players = game.players;
+
+            var x_values = new Array();
+            var y_values = new Array();
+            var z_values = new Array();
+
+            x_values.push(' ');
+
+            for (var i = 0; i < players.length; ++i) {
+                y_values.push(players[i].name);
+            }
+
+            for (var i = 0; i < players.length; ++i) {
+                var ks = [players[i].killingStreak];
+                z_values.push(ks);
+            }
+
+            var data = [
+                {
+                    x: x_values,
+                    y: y_values,
+                    z: z_values,
+                    type: 'heatmap',
+                    colorscale: 'YIGnBu',
+                    reversescale: true
+                }
+            ];
+
+            Plotly.newPlot('KillingStreakHeatMap', data);
+        }
+
+        update_player_ranking = function(game)
+        {
+            var ranking = get_game_info(game);
+            var div = document.getElementById("PlayerRanking");
+            div.innerHTML = ranking;
+        }
+
+        update_game_stats = function()
+        {
+            var game = get_game_from_selection();
+
+            update_player_ranking(game);
+            update_accuracy_heatmap(game);
+            update_kill_heatmap(game);
+            update_spawn_kill_heatmap(game);
+            update_suicides_heatmap(game);
+            update_killing_streak_heatmap(game);
+            update_item_heatmap(game);
+			update_score_timeline(game);
+
+        }
+
+        create_game_select = function()
+        {
+            var select = document.createElement("select");
+            select.setAttribute("onchange", "update_game_stats()");
+            select.setAttribute("id", "GameListSelect");
+
+            var games = qs.games;
+            for(var i=0; i<games.length; ++i)
+            {
+                var option = document.createElement('option');
+                option.setAttribute("value", i);
+                option.appendChild(document.createTextNode(games[i].time));
+                select.appendChild(option);
+            }
+
+            //elect.selectedIndex = table.rows.length-1;
+            select.selectedIndex = 0; // set select on last played game
+            var div = document.getElementById("GameSelect");
+            div.appendChild(select);
+
+            // init heat maps and map statistics
+            update_game_stats();
+        }
+		
+		update_score_timeline = function(game)
+		{
+            var plotData = new Array();
+			var players = game.players;
+			var maxTime = 900;
+			
+			for(var i=0; i<players.length; ++i)
+			{
+			    var x_values  = new Array();
+                var y_values  = new Array();
+				var playerName = players[i].name;
+
+				var scores = players[i].scoreTimeLine;
+				for(var j=0; j<scores.length; ++j)
+				{
+                    if(j>0){
+                        x_values.push(scores[j].time);
+                        y_values.push(scores[j-1].score);
+                    }
+					
+					x_values.push(scores[j].time);
+					y_values.push(scores[j].score);
+					
+					if(j==scores.length-1){
+						if(scores[j].time != maxTime)
+						{
+							x_values.push(maxTime);
+							y_values.push(scores[j].score);
+						}
+					}
+				}
+				
+				var trace = {
+                   x: x_values,
+                   y: y_values,
+                   mode: 'lines',
+                   name: playerName,
+                  // text: game_info,
+                   line: {
+                       //color: 'rgb(55, 128, 191)',
+                       width: 2
+                   },
+                   marker: {
+                       //color: 'rgb(55, 128, 191)',
+                       size: 5,
+                       line: {
+                           color: 'white',
+                           width: 0.5
+                       }
+                   },
+                   type: 'scatter'
+               };
+
+               plotData.push(trace);
+			}
+
+
+            // collect chats
+            for(var i=0; i<players.length; ++i)
+            {
+                var player = players[i];
+
+                if(player.chatTimeLine.length == 0)
+                    continue;
+
+
+                var x_values  = new Array();
+                var y_values  = new Array();
+                var chats     = new Array();
+                var playerName = player.name;
+
+                for(var j=0; j<player.chatTimeLine.length; ++j)
+                {
+                    x_values.push(player.chatTimeLine[j].time);
+                    y_values.push( player.chatTimeLine[j].score);
+                    chats.push( player.chatTimeLine[j].chat);
+
+                   // console.log(player.chatTimeLine[j].time + " " + player.chatTimeLine[j].score + " "+ player.chatTimeLine[j].chat);
+                }
+
+                var trace = {
+                    x: x_values,
+                    y: y_values,
+                    mode: 'markers',
+                    // name: playerName,
+                     text: chats,
+                    showlegend: false,
+                    marker: {
+                        color: 'rgb(55, 128, 191)',
+                        size: 13,
+                        line: {
+                            color: 'white',
+                            width: 0.5
+                        }
+                    },
+                };
+
+                plotData.push(trace);
+            }
+
+
+           var layout = {
+               title: 'Score Timeline',
+               hovermode : 'closest',
+               xaxis: {
+                   title: 'Time',
+                   showgrid: false,
+                   zeroline: false
+               },
+               yaxis: {
+                   title: 'Score',
+                   showline: false
+               },
+               legend: {
+                   y: 0.5,
+                   font: {size: 16},
+                   yref: 'paper'
+               }
+           };
+
+           Plotly.newPlot('ScoreTimeLine', plotData, layout);
+		}
+
+        onchange_slider_sliding_window = function()
+        {
+            update_chart();
+
+            // set slider value
+            var newValue = document.getElementById("SlidingWindowSlider").value;
+            document.getElementById("SlidingWindowValue").innerHTML = newValue;
+        }
+
+        window.onload = function ()
+        {
+            // set default value on startup
+            document.getElementById("SlidingWindowSlider").value = 10;
+            document.getElementById("SlidingWindowValue").innerHTML = 10;
+            document.getElementById("CheckBoxLines").checked = false;
+
+            // load quake 3 log file
+            qs = new QuakeStats("data/games.log");
+
+            // create drop down menu with player names and init first chart
+            onclick_add_player();
+
+            // create select tag element for played games
+            create_game_select();
+        }
+
+    </script>
+</head>
+
+<body>
+    <div id="GamesOverview">
+        <h1>Quake Statistics</h1> <br>
+        <div id="ScatterPlot" style="width:100%;height:50%;"></div>
+
+        <button onclick="onclick_add_player()">Add Player</button>
+        <button id="RemoveBtn" onclick="onclick_remove_player()">Remove Player</button>
+
+        <select id="PlotAttribute" onchange="update_chart()">
+            <option selected>Dmg Given / Dmg Received</option>
+            <option>Accuracy MachineGun</option>
+            <option>Accuracy Railgun</option>
+            <option>Accuracy Rocket Launcher</option>
+            <option>Accuracy Grenade Launcher</option>
+            <option>Accuracy Shotgun</option>
+            <option>Accuracy Plasmagun</option>
+            <option>1st Place</option>
+        </select>
+
+        <input id="SlidingWindowSlider" type="range"  min="0" max="100" step="1" value="20" onchange="onchange_slider_sliding_window()"/>
+        <span id="SlidingWindowValue">0</span>
+
+        <input id="CheckBoxLines" type="checkbox" checked="false" onchange="update_chart()">
+
+        <table id="PlayerTable"></table>
+    </div>
+
+   <div id="GameStatistics">
+       <h1>Map Statistics</h1><br>
+
+       <div id="Map">
+           <div id="GameSelect"></div><br>
+           <div id="PlayerRanking"></div>
+       </div>
+       <div id="Heatmaps">
+            <div id="SuicidesHeatMap">Suicides</div>
+            <div id="KillingStreakHeatMap">Killing Streak</div>
+            <div id="AccuracyHeatMap">Accuracy Map</div>
+            <div id="KillHeatMap">Kills Map (y kills x)</div>
+            <div id="SpawnKillHeatMap">Spawnkills Map (y kills x)</div>
+           <div id="ItemHeatMap">Items </div>
+       </div>
+   </div>
+
+    <div id="ScoreTimeLine" style="width:100%;"> </div>
+</body>
+</html>
